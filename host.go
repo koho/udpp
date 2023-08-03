@@ -14,7 +14,10 @@ import (
 	"github.com/koho/udpp/config"
 )
 
-var StreamExists = fmt.Errorf("stream already exists")
+var (
+	ErrStreamExists = fmt.Errorf("stream already exists")
+	ErrNodeInactive = fmt.Errorf("inactive node")
+)
 
 type Host struct {
 	ID        string
@@ -23,8 +26,8 @@ type Host struct {
 	NAT       *nathole.NatFeature // NAT information of the host
 
 	mu      sync.Mutex
-	streams map[string]*Stream
-	timeout int64 // Maximum idle time of a stream (in seconds)
+	streams map[string]*Stream // Peer connections
+	timeout int64              // Maximum idle time of a stream (in seconds)
 	ctx     context.Context
 	cancel  context.CancelFunc
 	done    chan struct{} // Channel that will be closed when the host has cleanly shutdown
@@ -37,7 +40,7 @@ func NewHost(ctx context.Context, id string, opts ...config.Option) (*Host, erro
 		return nil, err
 	}
 
-	// Discover NAT network information
+	// Discover NAT network information.
 	nat, err := Discover(cfg.Stun)
 	if err != nil {
 		return nil, err
@@ -45,7 +48,7 @@ func NewHost(ctx context.Context, id string, opts ...config.Option) (*Host, erro
 	endpoint := nat.RemoteAddrs[len(nat.RemoteAddrs)-1]
 
 	if nat.Feature.Behavior == nathole.BehaviorPortChanged {
-		// This only works with port auto-increment
+		// This only works with port auto-increment.
 		endpoint.Port++
 	}
 	if err = rdb.Set(ctx, id, endpoint.String(), time.Duration(cfg.Timeout)*time.Second).Err(); err != nil {
@@ -61,7 +64,7 @@ func NewHost(ctx context.Context, id string, opts ...config.Option) (*Host, erro
 		done:      make(chan struct{}),
 	}
 	host.ctx, host.cancel = context.WithCancel(ctx)
-	// Start a worker to maintain the host state
+	// Start a worker to maintain the host state.
 	go host.keepalive()
 	return host, nil
 }
@@ -74,7 +77,7 @@ func (h *Host) NewStream(peer *Peer) (*Stream, error) {
 		return nil, h.ctx.Err()
 	}
 	if old, ok := h.streams[peer.ID]; ok {
-		return old, StreamExists
+		return old, ErrStreamExists
 	}
 	conn, err := net.DialUDP("udp", h.LocalAddr, peer.Endpoint)
 	if err != nil {
@@ -94,9 +97,9 @@ func (h *Host) mustCreateStream(peer *Peer) (*Stream, error) {
 		stream, err := h.NewStream(peer)
 		if err != nil {
 			// Replace old stream when the peer restarted.
-			if errors.Is(err, StreamExists) {
+			if errors.Is(err, ErrStreamExists) {
 				h.mu.Lock()
-				log.Printf("[%s] replace stream with %s\n", peer.ID, peer.Endpoint)
+				log.Printf("[%s] replace connection with %s\n", peer.ID, peer.Endpoint)
 				stream.Close()
 				delete(h.streams, peer.ID)
 				h.mu.Unlock()
@@ -121,6 +124,7 @@ func (h *Host) Serve(addr *net.UDPAddr) error {
 				log.Println(err)
 				continue
 			}
+			log.Printf("connecting to peer %s (%s)\n", peer.ID, peer.Endpoint)
 			stream, err := h.mustCreateStream(peer)
 			if err != nil {
 				log.Println(err)
@@ -133,22 +137,25 @@ func (h *Host) Serve(addr *net.UDPAddr) error {
 					return
 				}
 				defer conn.Close()
-				log.Printf("[%s] new connection (%s, %s) -> (%s, %s)\n",
+				log.Printf("[%s] connection established (%s, %s) -> (%s, %s)\n",
 					peer.ID, conn.LocalAddr(), conn.RemoteAddr(), stream.LocalAddr(), stream.RemoteAddr())
 				if err = stream.Join(conn); err != nil {
 					log.Println(err)
 				}
-				log.Printf("[%s] stream closed\n", peer.ID)
+				log.Printf("[%s] connection closed\n", peer.ID)
 			}()
 		case <-h.ctx.Done():
-			return h.ctx.Err()
+			return ErrNodeInactive
 		}
 	}
 }
 
 func (h *Host) keepalive() {
 	defer close(h.done)
-	timer := time.NewTimer(60 * time.Second)
+	// Set the health check interval a bit longer than timeout
+	// to expire connections in a cycle.
+	interval := time.Duration(h.timeout+3) * time.Second
+	timer := time.NewTimer(interval)
 	for {
 		select {
 		case <-h.Expired():
@@ -158,7 +165,7 @@ func (h *Host) keepalive() {
 			h.mu.Lock()
 			for id, s := range h.streams {
 				if s.Expired() {
-					log.Printf("[%s] close stream due to inactivity\n", id)
+					log.Printf("[%s] close connection due to inactivity\n", id)
 					s.Close()
 					delete(h.streams, id)
 				} else {
@@ -167,10 +174,11 @@ func (h *Host) keepalive() {
 			}
 			h.mu.Unlock()
 			if alive {
+				// Refresh node state.
 				if err := rdb.Set(h.ctx, h.ID, h.Endpoint.String(), time.Duration(h.timeout)*time.Second).Err(); err != nil {
 					log.Println(err)
 				}
-				timer.Reset(60 * time.Second)
+				timer.Reset(interval)
 			} else {
 				h.cancel()
 				return

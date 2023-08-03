@@ -8,19 +8,23 @@ import (
 )
 
 type Config struct {
-	// Node ID
-	ID     string `yaml:"id"`
+	// Node ID.
+	ID string `yaml:"id"`
+	// Peer exchange server.
+	// Redis only for now, eg: redis://....
 	Server string `yaml:"server"`
-	Local  string `yaml:"local"`
-	Peer   Peer   `yaml:"peer"`
-	// Maximum connection idle time (in seconds)
-	Timeout int64 `yaml:"timeout"`
-	// STUN server address
-	Stun string `yaml:"stun"`
+	// Local is the destination address where traffic will be sent.
+	Local string `yaml:"local"`
+	Peer  Peer   `yaml:"peer,omitempty"`
+	// Maximum connection idle time (in seconds).
+	Timeout int64 `yaml:"timeout,omitempty"`
+	// STUN server address.
+	Stun string `yaml:"stun,omitempty"`
 }
 
 type Peer struct {
-	ID   string `yaml:"id"`
+	ID string `yaml:"id"`
+	// Bind is the listen address for receiving traffic.
 	Bind string `yaml:"bind"`
 }
 
@@ -46,10 +50,28 @@ func (cfg *Config) Apply(opts ...Option) error {
 	return nil
 }
 
+// Load config from the given file path.
 func (cfg *Config) Load(path string) error {
-	bytes, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	return yaml.Unmarshal(bytes, cfg)
+	return yaml.Unmarshal(data, cfg)
+}
+
+// Save config to the give file path.
+func (cfg *Config) Save(path string, flag int) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, flag, 0666)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err1 := f.Close(); err1 != nil && err == nil {
+		err = err1
+	}
+	return err
 }

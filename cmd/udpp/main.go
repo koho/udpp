@@ -8,67 +8,77 @@ import (
 	"os"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/koho/udpp"
 	"github.com/koho/udpp/config"
 )
 
-func main() {
-	var err error
-	var cfg = config.Default()
+var cfgFile string
 
-	path := "config.yml"
-	if len(os.Args) > 1 {
-		path = os.Args[1]
-	}
+func init() {
+	rootCmd.Flags().StringVarP(&cfgFile, "config", "c", "./config.yml", "config file path")
+}
 
-	if err = cfg.Load(path); err != nil {
-		panic(err)
-	}
-	if cfg.Local == "" {
-		panic(fmt.Errorf("local address is not specified"))
-	}
-	localAddr, err := net.ResolveUDPAddr("udp", cfg.Local)
-	if err != nil {
-		panic(err)
-	}
-	var bindAddr *net.UDPAddr
-	if cfg.Peer.Bind != "" {
-		bindAddr, err = net.ResolveUDPAddr("udp", cfg.Peer.Bind)
+var rootCmd = &cobra.Command{
+	Use:   "udpp",
+	Short: "A Point-to-Point UDP Tunnel.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var err error
+		var cfg = config.Default()
+
+		if err = cfg.Load(cfgFile); err != nil {
+			return err
+		}
+		if cfg.Local == "" {
+			return fmt.Errorf("local address is not specified")
+		}
+		localAddr, err := net.ResolveUDPAddr("udp", cfg.Local)
 		if err != nil {
-			panic(err)
+			return err
 		}
-	}
-
-	if err = udpp.Setup(cfg.Server); err != nil {
-		panic(err)
-	}
-	fmt.Printf("Node ID: %s\n", cfg.ID)
-
-	if cfg.Peer.ID == "" {
-		fmt.Println("Mode: forward")
-		fmt.Printf("Target: %s\n", localAddr)
-	} else {
-		fmt.Println("Mode: access")
-		fmt.Printf("Peer: %s\n", cfg.Peer.ID)
-		fmt.Printf("Listen: %s\n", bindAddr)
-		fmt.Printf("From: %s\n", localAddr)
-	}
-
-	var lastErr error
-	for {
-		if cfg.Peer.ID != "" {
-			err = access(&cfg, localAddr, bindAddr)
-		} else {
-			err = serve(&cfg, localAddr)
-		}
-		if errors.Is(err, udpp.PeerNotFound) {
-			if !errors.Is(lastErr, udpp.PeerNotFound) {
-				log.Printf("waiting for peer %s\n", cfg.Peer.ID)
+		var bindAddr *net.UDPAddr
+		if cfg.Peer.Bind != "" {
+			bindAddr, err = net.ResolveUDPAddr("udp", cfg.Peer.Bind)
+			if err != nil {
+				return err
 			}
-		} else {
-			log.Println(err)
 		}
-		lastErr = err
-		time.Sleep(5 * time.Second)
+
+		if err = udpp.Setup(cfg.Server); err != nil {
+			return err
+		}
+		fmt.Printf("Node ID: %s\n", cfg.ID)
+
+		if cfg.Peer.ID == "" {
+			fmt.Printf("Connection: %s -> %s\n", "any", localAddr)
+		} else {
+			fmt.Printf("Peer ID: %s\n", cfg.Peer.ID)
+			fmt.Printf("Connection: %s -> %s\n", bindAddr, localAddr)
+		}
+
+		var lastErr error
+		for {
+			if cfg.Peer.ID != "" {
+				err = access(&cfg, localAddr, bindAddr)
+			} else {
+				err = serve(&cfg, localAddr)
+			}
+			if errors.Is(err, udpp.ErrPeerNotFound) {
+				if !errors.Is(lastErr, udpp.ErrPeerNotFound) {
+					log.Printf("waiting for peer %s\n", cfg.Peer.ID)
+				}
+			} else if !errors.Is(err, udpp.ErrNodeInactive) {
+				log.Println(err)
+			}
+			lastErr = err
+			time.Sleep(5 * time.Second)
+		}
+	},
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
 	}
 }

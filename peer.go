@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-var PeerNotFound = fmt.Errorf("peer not found")
+var ErrPeerNotFound = fmt.Errorf("peer not found")
 
 type Peer struct {
 	ID       string
@@ -20,7 +20,7 @@ func NewPeer(id string, endpoint *net.UDPAddr) *Peer {
 func FindPeer(ctx context.Context, id string) (*Peer, error) {
 	endpoint := rdb.Get(ctx, id).Val()
 	if endpoint == "" {
-		return nil, PeerNotFound
+		return nil, ErrPeerNotFound
 	}
 	addr, err := net.ResolveUDPAddr("udp", endpoint)
 	if err != nil {

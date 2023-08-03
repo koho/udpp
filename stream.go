@@ -43,6 +43,8 @@ func (s *Stream) Expired() bool {
 	return time.Now().Unix()-s.ts > s.timeout
 }
 
+// Join provides a method for bridging two connections and facilitating data transmission
+// between them. Note that both connections are closed after the function returns.
 func (s *Stream) Join(other net.Conn) (err error) {
 	var wg sync.WaitGroup
 	wg.Add(2)

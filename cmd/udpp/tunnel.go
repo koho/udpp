@@ -43,12 +43,12 @@ func access(cfg *config.Config, localAddr, bindAddr *net.UDPAddr) error {
 	}
 	defer stream.Close()
 
-	log.Printf("ping peer %s\n", peer.ID)
+	log.Printf("connecting to peer %s (%s)\n", peer.ID, peer.Endpoint)
 	if err = stream.Ping(context.Background()); err != nil {
 		return err
 	}
-	log.Printf("[%s] new connection (%s, %s) -> (%s, %s)\n",
+	log.Printf("[%s] connection established (%s, %s) -> (%s, %s)\n",
 		peer.ID, bindAddr, localAddr, stream.LocalAddr(), stream.RemoteAddr())
-	defer log.Printf("[%s] stream closed\n", peer.ID)
+	defer log.Printf("[%s] connection closed\n", peer.ID)
 	return stream.Join(conn)
 }
